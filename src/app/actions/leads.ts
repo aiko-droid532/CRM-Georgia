@@ -1,0 +1,840 @@
+'use server';
+
+import { db as prisma, Prisma } from '@/lib/db';
+import { revalidatePath } from 'next/cache';
+
+export async function createClient(formData: {
+  name: string;
+  phone: string;
+  email?: string;
+  source?: string;
+  iin?: string;
+  managerNotes?: string;
+  organizationId: string;
+  createdById?: string;
+  type?: string;
+  personalNumber?: string;
+  passportNumber?: string;
+  passportCountry?: string;
+  consentToPdProcessing?: boolean;
+  optInMarketing?: boolean;
+  codeWord?: string;
+}) {
+  try {
+    const existingByPhone: any[] = await prisma.$queryRaw`
+      SELECT id, name FROM "Lead" 
+      WHERE "phone" = ${formData.phone} 
+      AND "organizationId" = ${formData.organizationId} 
+      LIMIT 1
+    `;
+
+    if (existingByPhone.length > 0) {
+      return { 
+        success: false, 
+        error: 'DUPLICATE', 
+        message: `Клиент с таким номером уже существует: ${existingByPhone[0].name}`,
+        existingClientId: existingByPhone[0].id 
+      };
+    }
+
+    if (formData.iin) {
+      const existingByIIN: any[] = await prisma.$queryRaw`
+        SELECT id, name FROM "Lead" 
+        WHERE "iin" = ${formData.iin} 
+        AND "organizationId" = ${formData.organizationId} 
+        LIMIT 1
+      `;
+
+      if (existingByIIN.length > 0) {
+        return { 
+          success: false, 
+          error: 'DUPLICATE', 
+          message: `Клиент с таким ИИН уже существует: ${existingByIIN[0].name}`,
+          existingClientId: existingByIIN[0].id 
+        };
+      }
+    }
+
+    if (formData.personalNumber) {
+      const existingByPN: any[] = await prisma.$queryRaw`
+        SELECT id, name FROM "Lead" 
+        WHERE "personalNumber" = ${formData.personalNumber} 
+        AND "organizationId" = ${formData.organizationId} 
+        LIMIT 1
+      `;
+
+      if (existingByPN.length > 0) {
+        return { 
+          success: false, 
+          error: 'DUPLICATE', 
+          message: `Клиент с таким Personal Number уже существует: ${existingByPN[0].name}`,
+          existingClientId: existingByPN[0].id 
+        };
+      }
+    }
+
+    const clientTypeEnum = formData.type || 'LEAD';
+
+    const clientId = crypto.randomUUID();
+    await prisma.$executeRaw`
+      INSERT INTO "Lead" (
+        "id", "name", "phone", "email", "iin", "managerNotes", "source", 
+        "organizationId", "createdById", "status", "callAttempts", "managerId",
+        "type", "personalNumber", "passportNumber", "passportCountry",
+        "consentToPdProcessing", "optInMarketing", "consentToPd",
+        "codeWord", "updatedAt"
+      ) VALUES (
+        ${clientId}, ${formData.name}, ${formData.phone}, ${formData.email || null}, 
+        ${formData.iin || null}, ${formData.managerNotes || null}, ${formData.source || null}, 
+        ${formData.organizationId}, ${formData.createdById || null}, 'NEW', 0, null,
+        ${clientTypeEnum}, ${formData.personalNumber || null}, 
+        ${formData.passportNumber || null}, ${formData.passportCountry || null},
+        ${formData.consentToPdProcessing || false}, ${formData.optInMarketing || false},
+        ${formData.consentToPdProcessing || false},
+        ${formData.codeWord || null},
+        NOW()
+      )
+    `;
+
+    revalidatePath('/leads');
+    revalidatePath('/clients');
+    return { success: true, client: { id: clientId } };
+  } catch (error) {
+    console.error('Failed to create client via SQL:', error);
+    return { success: false, error: 'SERVER_ERROR' };
+  }
+}
+
+export async function anonymizeClient(leadId: string, managerId: string, reason: string) {
+  try {
+    const currentList: any[] = await prisma.$queryRaw`
+      SELECT name, phone, email, iin, personalNumber, passportNumber, passportCountry, codeWord 
+      FROM "Lead" WHERE id = ${leadId} LIMIT 1
+    `;
+    const current = currentList[0];
+    if (!current) return { success: false, error: 'Клиент не найден' };
+
+    const anonymizedData = {
+      name: 'XXX',
+      phone: 'XXX',
+      email: null,
+      iin: null,
+      personalNumber: null,
+      passportNumber: null,
+      passportCountry: null,
+      codeWord: null,
+    };
+
+    await prisma.$executeRaw`
+      UPDATE "Lead" 
+      SET 
+        "name" = ${anonymizedData.name},
+        "phone" = ${anonymizedData.phone},
+        "email" = ${anonymizedData.email},
+        "iin" = ${anonymizedData.iin},
+        "personalNumber" = ${anonymizedData.personalNumber},
+        "passportNumber" = ${anonymizedData.passportNumber},
+        "passportCountry" = ${anonymizedData.passportCountry},
+        "codeWord" = ${anonymizedData.codeWord},
+        "updatedAt" = NOW()
+      WHERE id = ${leadId}
+    `;
+
+    await prisma.$executeRaw`
+      INSERT INTO "ChangeLog" ("id", "leadId", "managerId", "field", "oldValue", "newValue", "createdAt")
+      VALUES (
+        ${crypto.randomUUID()}, 
+        ${leadId}, 
+        ${managerId}, 
+        'ANONYMIZATION', 
+        ${JSON.stringify(current)}, 
+        ${`Анонимизация по причине: ${reason}`}, 
+        NOW()
+      )
+    `;
+
+    revalidatePath('/clients');
+    return { success: true };
+  } catch (error) {
+    console.error('Anonymize client error:', error);
+    return { success: false, error: 'SERVER_ERROR' };
+  }
+}
+
+export async function logPhoneView(leadId: string, managerId: string, reason: string) {
+  try {
+    await prisma.$executeRaw`
+      INSERT INTO "ChangeLog" ("id", "leadId", "managerId", "field", "oldValue", "newValue", "createdAt")
+      VALUES (
+        ${crypto.randomUUID()}, 
+        ${leadId}, 
+        ${managerId}, 
+        'PHONE_VIEW', 
+        null, 
+        ${`Просмотр телефона по причине: ${reason}`}, 
+        NOW()
+      )
+    `;
+    return { success: true };
+  } catch (error) {
+    console.error('Log phone view error:', error);
+    return { success: false };
+  }
+}
+
+export async function getLeads(organizationId: string) {
+  try {
+    const leads: any[] = await prisma.$queryRaw`
+      SELECT * FROM "Lead" 
+      WHERE "organizationId" = ${organizationId} 
+      ORDER BY "createdAt" DESC
+    `;
+
+    if (leads.length === 0) return [];
+
+    const leadIds = leads.map(l => l.id);
+
+    const allInterests: any[] = await prisma.$queryRaw`
+      SELECT 
+        li.*, 
+        u.number as "unitNumber", 
+        u.price as "unitPrice",
+        u.area as "unitArea",
+        u.rooms as "unitRooms",
+        p.name as "projectName"
+      FROM "LeadInterest" li
+      JOIN "Unit" u ON li."unitId" = u.id
+      JOIN "Block" b ON u."blockId" = b.id
+      JOIN "Project" p ON b."projectId" = p.id
+      WHERE li."leadId" IN (${Prisma.join(leadIds)})
+    `;
+
+    const allLogs: any[] = await prisma.$queryRaw`
+      SELECT * FROM "ChangeLog" 
+      WHERE "leadId" IN (${Prisma.join(leadIds)}) 
+      ORDER BY "createdAt" DESC
+    `;
+
+    return leads.map(lead => {
+      const interests = allInterests
+        .filter(i => i.leadId === lead.id)
+        .map(ri => ({
+          ...ri,
+          unit: {
+            id: ri.unitId,
+            number: ri.unitNumber,
+            price: ri.unitPrice,
+            area: ri.unitArea,
+            rooms: ri.unitRooms,
+            block: {
+              project: {
+                name: ri.projectName
+              }
+            }
+          }
+        }));
+
+      return {
+        ...lead,
+        interests: interests || [],
+        deals: [],
+        logs: allLogs.filter(l => l.leadId === lead.id) || []
+      };
+    });
+
+  } catch (error) {
+    console.error('Fast fetch clients error:', error);
+    return [];
+  }
+}
+
+export async function getLeadsBoard(organizationId: string) {
+  try {
+    const leads: any[] = await prisma.$queryRaw`
+      SELECT * FROM "Lead" 
+      WHERE "organizationId" = ${organizationId} 
+      ORDER BY "createdAt" DESC
+    `;
+    return leads;
+  } catch (error) {
+    console.error('getLeadsBoard error:', error);
+    return [];
+  }
+}
+
+export async function assignLeadToManager(leadId: string, managerId: string) {
+  try {
+    const res = await prisma.$executeRaw`
+      UPDATE "Lead"
+      SET "managerId" = ${managerId}, "status" = 'IN_QUALIFICATION', "updatedAt" = NOW()
+      WHERE "id" = ${leadId} AND "managerId" IS NULL
+    `;
+    if (res === 0) return { success: false, error: 'Лид уже взят в работу другим менеджером!' };
+    
+    revalidatePath('/leads');
+    return { success: true };
+  } catch (error) {
+    console.error('assignLeadToManager error:', error);
+    return { success: false, error: 'SERVER_ERROR' };
+  }
+}
+
+export async function logCallAttempt(leadId: string) {
+  try {
+    const leads: any[] = await prisma.$queryRaw`SELECT "callAttempts" FROM "Lead" WHERE id = ${leadId}`;
+    if (!leads.length) return { success: false };
+    
+    let attempts = (leads[0].callAttempts || 0) + 1;
+    
+    if (attempts >= 3) {
+      await prisma.$executeRaw`
+        UPDATE "Lead" SET "callAttempts" = ${attempts}, "status" = 'LOST', "updatedAt" = NOW() WHERE id = ${leadId}
+      `;
+    } else {
+      await prisma.$executeRaw`
+        UPDATE "Lead" SET "callAttempts" = ${attempts}, "updatedAt" = NOW() WHERE id = ${leadId}
+      `;
+    }
+    
+    revalidatePath('/leads');
+    return { success: true, attempts };
+  } catch (error) {
+    console.error('logCallAttempt error:', error);
+    return { success: false };
+  }
+}
+
+export async function updateLeadStatus(leadId: string, newStatus: string) {
+  try {
+    await prisma.$executeRaw`
+      UPDATE "Lead" SET "status" = ${newStatus}::"LeadStatus", "updatedAt" = NOW() WHERE id = ${leadId}
+    `;
+    revalidatePath('/leads');
+    return { success: true };
+  } catch (error) {
+    console.error('updateLeadStatus error:', error);
+    return { success: false };
+  }
+}
+
+export async function createDeal(data: {
+  leadId: string;
+  unitId: string;
+  organizationId: string;
+  managerId?: string;
+  interestId: string;
+}) {
+  try {
+    const leads: any[] = await prisma.$queryRaw`
+      SELECT "phone", "source" FROM "Lead" WHERE "id" = ${data.leadId} LIMIT 1
+    `;
+    const lead = leads[0];
+
+    if (!lead || !lead.phone || !lead.source) {
+      return { 
+        success: false, 
+        error: 'VALIDATION_FAILED', 
+        message: 'У клиента должен быть указан телефон и источник для создания сделки!' 
+      };
+    }
+
+    const dealId = crypto.randomUUID();
+    
+    await prisma.$executeRaw`
+      INSERT INTO "Deal" ("id", "leadId", "unitId", "status", "organizationId", "managerId", "createdAt", "updatedAt")
+      VALUES (${dealId}, ${data.leadId}, ${data.unitId}, 'NEW_LEAD', ${data.organizationId}, ${data.managerId}, NOW(), NOW())
+    `;
+
+    await prisma.$executeRaw`
+      UPDATE "LeadInterest" SET "status" = 'DEAL' WHERE "id" = ${data.interestId}
+    `;
+
+    await prisma.$executeRaw`
+      UPDATE "Unit" SET "status" = 'RESERVATION_PAID'::"UnitStatus" WHERE "id" = ${data.unitId}
+    `;
+
+    revalidatePath('/clients');
+    return { success: true, deal: { id: dealId } };
+  } catch (error) {
+    console.error('Create deal SQL error:', error);
+    return { success: false, error: 'SERVER_ERROR' };
+  }
+}
+
+export async function updateClient(data: {
+  id: string;
+  name?: string;
+  phone?: string;
+  iin?: string;
+  managerNotes?: string;
+  managerId: string;
+}) {
+  try {
+    const currentList: any[] = await prisma.$queryRaw`
+      SELECT * FROM "Lead" WHERE id = ${data.id} LIMIT 1
+    `;
+    const current = currentList[0];
+    if (!current) return { success: false };
+
+    const updates: string[] = [];
+    const logs = [];
+
+    if (data.name && data.name !== current.name) {
+      updates.push(Prisma.sql`"name" = ${data.name}`);
+      logs.push({ field: 'name', old: current.name, new: data.name });
+    }
+    if (data.phone && data.phone !== current.phone) {
+      updates.push(Prisma.sql`"phone" = ${data.phone}`);
+      logs.push({ field: 'phone', old: current.phone, new: data.phone });
+    }
+    if (data.iin !== undefined && data.iin !== current.iin) {
+      updates.push(Prisma.sql`"iin" = ${data.iin}`);
+      logs.push({ field: 'iin', old: current.iin || '', new: data.iin });
+    }
+    if (data.managerNotes !== undefined && data.managerNotes !== current.managerNotes) {
+      updates.push(Prisma.sql`"managerNotes" = ${data.managerNotes}`);
+    }
+
+    if (updates.length === 0) return { success: true };
+
+    await prisma.$executeRaw`
+      UPDATE "Lead" 
+      SET ${Prisma.join(updates, ', ')}, "updatedAt" = NOW()
+      WHERE id = ${data.id}
+    `;
+
+    for (const log of logs) {
+      await prisma.$executeRaw`
+        INSERT INTO "ChangeLog" ("id", "leadId", "managerId", "field", "oldValue", "newValue", "createdAt")
+        VALUES (${crypto.randomUUID()}, ${data.id}, ${data.managerId}, ${log.field}, ${log.old}, ${log.new}, NOW())
+      `;
+    }
+
+    revalidatePath('/clients');
+    return { success: true };
+  } catch (error) {
+    console.error('Update client SQL error:', error);
+    return { success: false };
+  }
+}
+
+export async function getLeadById(id: string) {
+  try {
+    const leads: any[] = await prisma.$queryRaw`
+      SELECT * FROM "Lead" WHERE "id" = ${id} LIMIT 1
+    `;
+    if (leads.length === 0) return null;
+
+    const lead = leads[0];
+
+    const interests: any[] = await prisma.$queryRaw`
+      SELECT i.*, u.number, u.price, p.name as "projectName"
+      FROM "LeadInterest" i
+      JOIN "Unit" u ON i."unitId" = u.id
+      JOIN "Block" b ON u."blockId" = b.id
+      JOIN "Project" p ON b."projectId" = p.id
+      WHERE i."leadId" = ${id}
+    `;
+
+    const deals: any[] = await prisma.$queryRaw`
+      SELECT d.*, u.number as "unitNumber", u.price as "unitPrice", p.name as "projectName"
+      FROM "Deal" d
+      JOIN "Unit" u ON d."unitId" = u.id
+      JOIN "Block" b ON u."blockId" = b.id
+      JOIN "Project" p ON b."projectId" = p.id
+      WHERE d."leadId" = ${id}
+    `;
+
+    const dealsWithPayments = [];
+    for (const d of deals) {
+      const payments: any[] = await prisma.$queryRaw`
+        SELECT * FROM "PaymentSchedule" WHERE "dealId" = ${d.id} ORDER BY "dueDate" ASC
+      `;
+      dealsWithPayments.push({
+        ...d,
+        payments
+      });
+    }
+
+    const logs: any[] = await prisma.$queryRaw`
+      SELECT * FROM "ChangeLog" WHERE "leadId" = ${id} ORDER BY "createdAt" DESC
+    `;
+
+    return {
+      ...lead,
+      interests: interests.map(i => ({
+        ...i,
+        unit: { number: i.number, price: i.price, block: { project: { name: i.projectName } } }
+      })),
+      deals: dealsWithPayments,
+      logs
+    };
+  } catch (error) {
+    console.error('getLeadById SQL error:', error);
+    return null;
+  }
+}
+
+export async function savePaymentScheduleAction(data: {
+  leadId: string;
+  unitId: string;
+  paymentType: string;
+  downPayment: number;
+  totalAmount: number;
+  exchangeRate: number;
+  schedule: Array<{ date: string; amountUSD: number; amountGEL: number }>;
+  organizationId: string;
+}) {
+  try {
+    let dealId = '';
+    
+    const deals: any[] = await prisma.$queryRaw`
+      SELECT id FROM "Deal" WHERE "leadId" = ${data.leadId} AND "unitId" = ${data.unitId} LIMIT 1
+    `;
+    
+    if (deals.length > 0) {
+      dealId = deals[0].id;
+    } else {
+      dealId = crypto.randomUUID();
+      await prisma.$executeRaw`
+        INSERT INTO "Deal" ("id", "leadId", "unitId", "status", "organizationId", "createdAt", "updatedAt")
+        VALUES (${dealId}, ${data.leadId}, ${data.unitId}, 'NEW_LEAD', ${data.organizationId}, NOW(), NOW())
+      `;
+      await prisma.$executeRaw`
+        UPDATE "LeadInterest" SET "status" = 'DEAL' WHERE "leadId" = ${data.leadId} AND "unitId" = ${data.unitId}
+      `;
+    }
+
+    await prisma.$executeRaw`
+      UPDATE "Deal" 
+      SET "paymentType" = ${data.paymentType}, "downPayment" = ${data.downPayment}, "totalAmount" = ${data.totalAmount}, "updatedAt" = NOW()
+      WHERE id = ${dealId}
+    `;
+
+    await prisma.$executeRaw`
+      DELETE FROM "PaymentSchedule" WHERE "dealId" = ${dealId}
+    `;
+
+    for (const p of data.schedule) {
+      const scheduleId = crypto.randomUUID();
+      let dueDate = new Date();
+      const parts = p.date.split('.');
+      if (parts.length === 3) {
+        dueDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      } else {
+        dueDate = new Date(p.date);
+      }
+
+      await prisma.$executeRaw`
+        INSERT INTO "PaymentSchedule" ("id", "dealId", "amount", "dueDate", "status", "organizationId", "createdAt", "updatedAt")
+        VALUES (${scheduleId}, ${dealId}, ${p.amountUSD}, ${dueDate}, 'PENDING', ${data.organizationId}, NOW(), NOW())
+      `;
+    }
+
+    revalidatePath('/clients');
+    return { success: true };
+  } catch (error) {
+    console.error('savePaymentScheduleAction SQL error:', error);
+    return { success: false, error: 'SERVER_ERROR' };
+  }
+}
+
+export async function getActiveManagers(organizationId: string) {
+  try {
+    const managers: any[] = await prisma.$queryRaw`
+      SELECT id, name, status, "currentLoad", "lastActiveAt"
+      FROM "Manager"
+      WHERE "organizationId" = ${organizationId} AND status = 'ACTIVE'
+      ORDER BY "currentLoad" ASC
+    `;
+    return managers;
+  } catch (error) {
+    console.error('getActiveManagers error:', error);
+    return [];
+  }
+}
+
+export async function assignLeadAutomatically(leadId: string, organizationId: string) {
+  try {
+    await prisma.$executeRaw`
+      UPDATE "Lead" 
+      SET "status" = 'IN_QUALIFICATION', 
+          "assignedAt" = NOW(), 
+          "updatedAt" = NOW()
+      WHERE id = ${leadId}
+    `;
+    
+    console.log(`✅ Лид ${leadId} переведен в статус IN_QUALIFICATION`);
+    return { success: true };
+  } catch (error) {
+    console.error('assignLeadAutomatically error:', error);
+    return { success: false, error: 'SERVER_ERROR' };
+  }
+}
+
+// ========== ОБНОВЛЕННАЯ ФУНКЦИЯ КВАЛИФИКАЦИИ (С НОВЫМИ ПОЛЯМИ) ==========
+export async function qualifyLead(leadId: string, data: {
+  interestedProjectId?: string;
+  propertyType?: string;
+  budgetMin?: number;
+  budgetMax?: number;
+  paymentMethod?: string;
+  sourceInfo?: string;
+  // НОВЫЕ ПОЛЯ
+  roomsInterested?: number | null;
+  areaMin?: number | null;
+  areaMax?: number | null;
+  deliveryDeadline?: string | null;
+}) {
+  try {
+    await prisma.$executeRaw`
+      UPDATE "Lead" 
+      SET 
+        "interestedProjectId" = ${data.interestedProjectId || null},
+        "propertyType" = ${data.propertyType || null},
+        "budgetMin" = ${data.budgetMin || null},
+        "budgetMax" = ${data.budgetMax || null},
+        "paymentMethod" = ${data.paymentMethod || null},
+        "sourceInfo" = ${data.sourceInfo || null},
+        "roomsInterested" = ${data.roomsInterested ?? null},
+        "areaMin" = ${data.areaMin ?? null},
+        "areaMax" = ${data.areaMax ?? null},
+        "deliveryDeadline" = ${data.deliveryDeadline || null},
+        "status" = 'QUALIFIED',
+        "updatedAt" = NOW()
+      WHERE id = ${leadId}
+    `;
+    
+    revalidatePath('/leads');
+    return { success: true };
+  } catch (error) {
+    console.error('qualifyLead error:', error);
+    return { success: false };
+  }
+}
+
+export async function escalateExpiredLeads() {
+  try {
+    const expiredLeads: any[] = await prisma.$queryRaw`
+      SELECT l.id, l.name, l.managerId, m."supervisorId"
+      FROM "Lead" l
+      LEFT JOIN "Manager" m ON l."managerId" = m.id
+      WHERE l.status = 'NEW' 
+        AND l."createdAt" < NOW() - INTERVAL '15 minutes'
+        AND l."escalatedAt" IS NULL
+    `;
+    
+    for (const lead of expiredLeads) {
+      await prisma.$executeRaw`
+        UPDATE "Lead" SET "escalatedAt" = NOW(), "updatedAt" = NOW() WHERE id = ${lead.id}
+      `;
+      
+      console.log(`⚠️ Эскалация лида ${lead.name} (${lead.id}) для менеджера ${lead.managerId}`);
+    }
+    
+    return { success: true, escalatedCount: expiredLeads.length };
+  } catch (error) {
+    console.error('escalateExpiredLeads error:', error);
+    return { success: false };
+  }
+}
+
+export async function getLeadsKanban(organizationId: string) {
+  try {
+    const leads: any[] = await prisma.$queryRaw`
+      SELECT 
+        l.*,
+        NULL as "managerName",
+        p.name as "interestedProjectName"
+      FROM "Lead" l
+      LEFT JOIN "Project" p ON l."interestedProjectId" = p.id
+      WHERE l."organizationId" = ${organizationId}
+      ORDER BY 
+        CASE l.status
+          WHEN 'NEW' THEN 1
+          WHEN 'IN_QUALIFICATION' THEN 2
+          WHEN 'QUALIFIED' THEN 3
+          WHEN 'IN_PROGRESS' THEN 4
+          WHEN 'CONVERTED' THEN 5
+          WHEN 'LOST' THEN 6
+          ELSE 7
+        END,
+        l."createdAt" ASC
+    `;
+    
+    console.log(`✅ getLeadsKanban: найдено ${leads.length} лидов для orgId=${organizationId}`);
+    return leads;
+  } catch (error) {
+    console.error('getLeadsKanban error:', error);
+    return [];
+  }
+}
+
+export async function reassignLead(leadId: string, newManagerId: string, reason: string) {
+  try {
+    const oldLead: any[] = await prisma.$queryRaw`
+      SELECT "managerId" FROM "Lead" WHERE id = ${leadId}
+    `;
+    
+    if (oldLead[0]?.managerId) {
+      await prisma.$executeRaw`
+        UPDATE "Manager" SET "currentLoad" = "currentLoad" - 1 WHERE id = ${oldLead[0].managerId}
+      `;
+    }
+    
+    await prisma.$executeRaw`
+      UPDATE "Manager" SET "currentLoad" = "currentLoad" + 1 WHERE id = ${newManagerId}
+    `;
+    
+    await prisma.$executeRaw`
+      UPDATE "Lead" 
+      SET "managerId" = ${newManagerId}, 
+          "reassignedAt" = NOW(),
+          "reassignReason" = ${reason},
+          "updatedAt" = NOW()
+      WHERE id = ${leadId}
+    `;
+    
+    revalidatePath('/leads');
+    return { success: true };
+  } catch (error) {
+    console.error('reassignLead error:', error);
+    return { success: false };
+  }
+}
+
+export async function getLeadInterests(leadId: string) {
+  try {
+    const interests: any[] = await prisma.$queryRaw`
+      SELECT li.id, li."unitId", u.number as "unitNumber", u.price as "unitPrice", p.name as "projectName"
+      FROM "LeadInterest" li
+      JOIN "Unit" u ON li."unitId" = u.id
+      JOIN "Block" b ON u."blockId" = b.id
+      JOIN "Project" p ON b."projectId" = p.id
+      WHERE li."leadId" = ${leadId} AND li.status::text = 'ACTIVE'
+    `;
+    return interests;
+  } catch (error) {
+    console.error('getLeadInterests error:', error);
+    return [];
+  }
+}
+
+// ========== ГРАФИК ПРИЕМА ЛИДОВ ==========
+
+export type TimeSlot = {
+  id: string;
+  leadId: string;
+  managerId: string | null;
+  date: string;
+  time: string;
+  status: 'AVAILABLE' | 'BOOKED' | 'COMPLETED' | 'CANCELLED';
+  leadName: string;
+  leadPhone: string;
+  createdAt: string;
+};
+
+export async function getManagerSchedule(managerId: string, startDate: string) {
+  try {
+    const slots: any[] = await prisma.$queryRaw`
+      SELECT * FROM "LeadSchedule"
+      WHERE "managerId" = ${managerId}
+        AND "date" >= ${startDate}
+        AND "date" < ${startDate}::date + interval '7 days'
+      ORDER BY "date", "time"
+    `;
+    return slots;
+  } catch (error) {
+    console.error('getManagerSchedule error:', error);
+    return [];
+  }
+}
+
+// Записать лида на прием (забронировать слот)
+export async function bookScheduleSlot(data: {
+  leadId: string;
+  managerId: string;
+  date: string;
+  time: string;
+}) {
+  try {
+    // Проверяем, не занят ли уже этот слот у этого менеджера
+    const existing: any[] = await prisma.$queryRaw`
+      SELECT id FROM "LeadSchedule"
+      WHERE "managerId" = ${data.managerId}
+        AND "date" = ${data.date}::date
+        AND "time" = ${data.time}
+      LIMIT 1
+    `;
+
+    if (existing.length > 0) {
+      return { success: false, error: 'SLOT_TAKEN', message: 'Это время уже занято другим лидом' };
+    }
+
+    // Получаем данные лида
+    const lead: any[] = await prisma.$queryRaw`
+      SELECT name, phone FROM "Lead" WHERE id = ${data.leadId} LIMIT 1
+    `;
+
+    if (lead.length === 0) {
+      return { success: false, error: 'LEAD_NOT_FOUND', message: 'Лид не найден' };
+    }
+
+    // Создаем запись
+    const slotId = crypto.randomUUID();
+    await prisma.$executeRaw`
+      INSERT INTO "LeadSchedule" ("id", "leadId", "managerId", "date", "time", "status", "leadName", "leadPhone", "createdAt", "updatedAt")
+      VALUES (${slotId}, ${data.leadId}, ${data.managerId}, ${data.date}::date, ${data.time}, 'BOOKED', ${lead[0].name}, ${lead[0].phone}, NOW(), NOW())
+    `;
+
+    revalidatePath('/leads');
+    return { success: true, slotId };
+  } catch (error) {
+    console.error('bookScheduleSlot error:', error);
+    return { success: false, error: 'SERVER_ERROR', message: 'Ошибка сервера при записи' };
+  }
+}
+
+export async function cancelScheduleSlot(slotId: string, reason: string) {
+  try {
+    await prisma.$executeRaw`
+      UPDATE "LeadSchedule"
+      SET "status" = 'CANCELLED', "updatedAt" = NOW()
+      WHERE "id" = ${slotId}
+    `;
+    revalidatePath('/leads');
+    return { success: true };
+  } catch (error) {
+    console.error('cancelScheduleSlot error:', error);
+    return { success: false };
+  }
+}
+
+export async function completeScheduleSlot(slotId: string) {
+  try {
+    await prisma.$executeRaw`
+      UPDATE "LeadSchedule"
+      SET "status" = 'COMPLETED', "updatedAt" = NOW()
+      WHERE "id" = ${slotId}
+    `;
+    revalidatePath('/leads');
+    return { success: true };
+  } catch (error) {
+    console.error('completeScheduleSlot error:', error);
+    return { success: false };
+  }
+}
+
+export async function getLeadSchedule(leadId: string) {
+  try {
+    const slots: any[] = await prisma.$queryRaw`
+      SELECT * FROM "LeadSchedule"
+      WHERE "leadId" = ${leadId}
+      ORDER BY "date" DESC, "time" DESC
+    `;
+    return slots;
+  } catch (error) {
+    console.error('getLeadSchedule error:', error);
+    return [];
+  }
+}
