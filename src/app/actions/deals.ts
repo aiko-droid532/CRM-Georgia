@@ -201,7 +201,23 @@ export async function addDealClient(dealId: string, leadId: string, isPrimary: b
       INSERT INTO "DealClient" ("id", "dealId", "leadId", "isPrimary", "createdAt", "updatedAt")
       VALUES (${id}, ${dealId}, ${leadId}, ${isPrimary}, NOW(), NOW())
     `;
-    
+
+    // Если добавляем как основного — пишем лог в ChangeLog
+    if (isPrimary) {
+      await prisma.$executeRaw`
+        INSERT INTO "ChangeLog" ("id", "leadId", "managerId", "field", "oldValue", "newValue", "createdAt")
+        VALUES (
+          ${crypto.randomUUID()},
+          ${leadId},
+          ${'system'},
+          'PRIMARY_CLIENT_SET',
+          null,
+          ${`Клиент назначен основным в сделке ${dealId}`},
+          NOW()
+        )
+      `;
+    }
+
     revalidatePath('/deals');
     return { success: true, clientId: id };
   } catch (error) {
@@ -232,20 +248,34 @@ export async function setPrimaryClient(dealId: string, newLeadId: string) {
     await prisma.$executeRaw`
       UPDATE "DealClient" SET "isPrimary" = false WHERE "dealId" = ${dealId}
     `;
-    
+
     // 2. Ставим флаг isPrimary = true на выбранном клиенте
     await prisma.$executeRaw`
       UPDATE "DealClient" SET "isPrimary" = true 
       WHERE "dealId" = ${dealId} AND "leadId" = ${newLeadId}
     `;
-    
+
     // 3. ОБНОВЛЯЕМ основную сделку – меняем leadId
     await prisma.$executeRaw`
       UPDATE "Deal" 
       SET "leadId" = ${newLeadId}, "updatedAt" = NOW()
       WHERE "id" = ${dealId}
     `;
-    
+
+    // 4. Пишем лог в ChangeLog о смене основного клиента
+    await prisma.$executeRaw`
+      INSERT INTO "ChangeLog" ("id", "leadId", "managerId", "field", "oldValue", "newValue", "createdAt")
+      VALUES (
+        ${crypto.randomUUID()},
+        ${newLeadId},
+        ${'system'},
+        'PRIMARY_CLIENT_CHANGED',
+        null,
+        ${`Клиент назначен основным (заменил предыдущего) в сделке ${dealId}`},
+        NOW()
+      )
+    `;
+
     revalidatePath('/deals');
     return { success: true };
   } catch (error) {
@@ -282,17 +312,17 @@ export async function addDealUnit(dealId: string, unitId: string) {
       WHERE "dealId" = ${dealId} AND "unitId" = ${unitId} AND "isDeleted" = false
       LIMIT 1
     `;
-    
+
     if (existing.length > 0) {
       return { success: false, error: 'ALREADY_EXISTS', message: 'Объект уже добавлен в сделку' };
     }
-    
+
     const id = crypto.randomUUID();
     await prisma.$executeRaw`
       INSERT INTO "DealUnit" ("id", "dealId", "unitId", "isDeleted", "createdAt", "updatedAt")
       VALUES (${id}, ${dealId}, ${unitId}, false, NOW(), NOW())
     `;
-    
+
     revalidatePath('/deals');
     return { success: true, unitId: id };
   } catch (error) {
@@ -308,13 +338,13 @@ export async function addDealUnit(dealId: string, unitId: string) {
 export async function removeDealUnit(dealUnitId: string, deleteReason: string, customReason?: string) {
   try {
     const finalReason = deleteReason === 'Другое' ? customReason : deleteReason;
-    
+
     await prisma.$executeRaw`
       UPDATE "DealUnit"
       SET "isDeleted" = true, "deleteReason" = ${finalReason}, "deletedAt" = NOW(), "updatedAt" = NOW()
       WHERE "id" = ${dealUnitId}
     `;
-    
+
     revalidatePath('/deals');
     return { success: true };
   } catch (error) {
@@ -358,5 +388,3 @@ export async function searchUnits(organizationId: string, query: string) {
     return [];
   }
 }
-
-

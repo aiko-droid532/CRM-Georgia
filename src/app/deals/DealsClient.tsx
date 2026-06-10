@@ -12,7 +12,8 @@ import { updateDealStatus, updateDealMortgage,
   removeDealUnit,
   searchLeads,
   searchUnits } from '@/app/actions/deals';
-import { logCallAttempt } from '@/app/actions/leads';
+import { logCallAttempt, createClient } from '@/app/actions/leads';
+import LeadModal from '@/components/Leads/LeadModal';
 import { useRouter } from 'next/navigation';
 
 type StageType = 'normal' | 'group' | 'child';
@@ -21,13 +22,13 @@ type StageType = 'normal' | 'group' | 'child';
 const STAGES: { id: string; label: string; color: string; type: StageType; children?: string[] }[] = [
   { id: 'NEW_LEAD', label: 'Новый лид', color: '#6366f1', type: 'normal' },
   { id: 'CLARIFICATION', label: 'Уточнение', color: '#818cf8', type: 'normal' },
-  
+
   // Группа Звонок (одна колонка в Kanban, ТЗ 8.1.2)
   { id: 'CALL_GROUP', label: 'Звонок', color: '#3b82f6', type: 'group', children: ['CALL', 'SECOND_CALL', 'THIRD_CALL'] },
   { id: 'CALL', label: '1-й звонок', color: '#3b82f6', type: 'child' },
   { id: 'SECOND_CALL', label: 'Второй звонок', color: '#2563eb', type: 'child' },
   { id: 'THIRD_CALL', label: 'Третий звонок', color: '#1d4ed8', type: 'child' },
-  
+
   { id: 'CONSULTATION', label: 'Личная консультация', color: '#f59e0b', type: 'normal' },
   { id: 'PRE_RESERVATION', label: 'Бронирование (Soft)', color: '#fbbf24', type: 'normal' },
   { id: 'RESERVATION', label: 'Предв. бронирование (Hard)', color: '#f97316', type: 'normal' },
@@ -36,7 +37,7 @@ const STAGES: { id: string; label: string; color: string; type: StageType; child
   { id: 'CLIENT_CONFIRMATION', label: 'Подтверждено клиентом', color: '#059669', type: 'normal' },
   { id: 'WAITING_PAYMENT', label: 'Ожидание оплаты', color: '#ec4899', type: 'normal' },
   { id: 'PAYMENT_CONFIRMED', label: 'Оплата подтверждена', color: '#db2777', type: 'normal' },
-  
+
   { id: 'SUCCESS', label: 'Won (успешно)', color: '#15803d', type: 'normal' },
   { id: 'FAILED', label: 'Lost (отказ)', color: '#ef4444', type: 'normal' },
   { id: 'CANCELLED', label: 'Cancelled (расторжение)', color: '#64748b', type: 'normal' }
@@ -52,7 +53,7 @@ export default function DealsClient({ initialDeals, organizationId }: DealsClien
   const [deals, setDeals] = useState(initialDeals);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({ CALL_GROUP: true });
   const [selectedDeal, setSelectedDeal] = useState<any | null>(null);
-  
+
   // Поля для редактирования ипотеки в модалке
   const [mortgageBank, setMortgageBank] = useState('');
   const [mortgageStatus, setMortgageStatus] = useState('NONE');
@@ -71,6 +72,7 @@ const [searchLoading, setSearchLoading] = useState(false);
 const [selectedClient, setSelectedClient] = useState<any>(null);
 const [selectedUnit, setSelectedUnit] = useState<any>(null);
 const [isPrimaryClient, setIsPrimaryClient] = useState(false);
+const [showRegisterNewClient, setShowRegisterNewClient] = useState(false);
 const [deleteReason, setDeleteReason] = useState('');
 const [customDeleteReason, setCustomDeleteReason] = useState('');
 
@@ -94,7 +96,7 @@ const [customDeleteReason, setCustomDeleteReason] = useState('');
     const targetStage = targetStageId === 'CALL_GROUP' ? 'CALL' : targetStageId;
 
     const originalDeals = [...deals];
-    setDeals(prev => 
+    setDeals(prev =>
       prev.map(d => d.id === dealId ? { ...d, status: targetStage } : d)
     );
 
@@ -176,11 +178,11 @@ const UNIT_DELETE_REASONS = [
       let nextStatus = deal.status;
       if (deal.status === 'CALL') nextStatus = 'SECOND_CALL';
       else if (deal.status === 'SECOND_CALL') nextStatus = 'THIRD_CALL';
-      
+
       if (nextStatus !== deal.status) {
         await updateDealStatus(deal.id, nextStatus);
       }
-      
+
       if (res.attempts >= 3) {
         alert('Достигнуто 3 попытки звонка без ответа. Рекомендуется перевести сделку в статус LOST.');
       }
@@ -262,14 +264,14 @@ const handleRemoveUnit = async () => {
 // Сменить основного клиента
 const handleSetPrimaryClient = async (leadId: string) => {
   if (!selectedDeal) return;
-  
+
   // Находим данные нового основного клиента
   const newPrimaryClient = dealClients.find(c => c.leadId === leadId);
   if (!newPrimaryClient) return;
-  
+
   // Обновляем в базе данных
   const res = await setPrimaryClient(selectedDeal.id, leadId);
-  
+
   if (res.success) {
     // Обновляем локальный state selectedDeal
     setSelectedDeal({
@@ -283,7 +285,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
       },
       clientName: newPrimaryClient.name
     });
-    
+
     // Перезагружаем список клиентов
     await loadDealExtras(selectedDeal.id);
     alert('Основной клиент изменен');
@@ -311,7 +313,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
           const conversion = calculateConversion(stageDeals.length);
           // По ТЗ деньги суммируем только со стадии Личная консультация (CONSULTATION, ранг >= 5)
           const isFinancialStage = stage.id !== 'NEW_LEAD' && stage.id !== 'CLARIFICATION' && stage.id !== 'CALL_GROUP';
-          const stageRevenue = isFinancialStage 
+          const stageRevenue = isFinancialStage
             ? stageDeals.reduce((sum, deal) => sum + (deal.unit?.price || 0), 0)
             : 0;
 
@@ -343,7 +345,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
                 </div>
               </div>
 
-              <div 
+              <div
                 className={styles.verticalCardList}
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, stage.id)}
@@ -352,11 +354,11 @@ const handleSetPrimaryClient = async (leadId: string) => {
                   stageDeals.map((deal) => {
                     const daysInStatus = Math.floor((Date.now() - new Date(deal.updatedAt).getTime()) / (1000 * 60 * 60 * 24));
                     const isSlaOverdue = daysInStatus >= 3; // SLA 3 дня на статус по умолчанию
-                    
+
 
                     return (
-                      <div 
-                        key={deal.id} 
+                      <div
+                        key={deal.id}
                         className={styles.dealCardVertical}
                         draggable
                         onDragStart={(e) => handleDragStart(e, deal.id)}
@@ -367,12 +369,12 @@ const handleSetPrimaryClient = async (leadId: string) => {
                           <span className={styles.dealIdSmall}>#{deal.id.slice(0, 6)}</span>
                         </div>
                         <div className={styles.clientNameSmall}>{deal.clientName || 'Без имени'}</div>
-                        
+
                         <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px'}}>
                           <span className={styles.priceTagSmall}>
                             {deal.unit?.price ? `$${deal.unit.price.toLocaleString()}` : '—'}
                           </span>
-                          
+
                           {/* SLA тикер дней на этапе */}
                           <span style={{
                             fontSize: '0.75rem',
@@ -400,7 +402,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
                             }}>
                               {deal.status === 'CALL' ? '1-й звонок' : deal.status === 'SECOND_CALL' ? '2-й звонок' : '3-й звонок'}
                             </span>
-                            <button 
+                            <button
                               className={styles.quickCallBtn}
                               onClick={(e) => handleQuickCall(e, deal)}
                             >
@@ -453,15 +455,15 @@ const handleSetPrimaryClient = async (leadId: string) => {
                           </div>
                         </div>
 
-                        <div 
+                        <div
                           className={styles.verticalCardList}
                           onDragOver={handleDragOver}
                           onDrop={(e) => handleDrop(e, childId)}
                         >
                           {childDeals.length > 0 ? (
                             childDeals.map((deal) => (
-                              <div 
-                                key={deal.id} 
+                              <div
+                                key={deal.id}
                                 className={styles.dealCardVertical}
                                 draggable
                                 onDragStart={(e) => handleDragStart(e, deal.id)}
@@ -513,7 +515,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
       <h3 style={{ fontWeight: 800, fontSize: '1.25rem', color: '#1e293b', borderBottom: '1px solid #f1f5f9', paddingBottom: '5px', margin: 0 }}>
         👤 Данные клиента
       </h3>
-      <button 
+      <button
         className={styles.quickCallBtn}
         onClick={() => {
           setSearchQuery('');
@@ -572,7 +574,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
           </div>
           <div>
             {!client.isPrimary && (
-              <button 
+              <button
                 className={styles.quickCallBtn}
                 style={{ marginRight: '8px' }}
                 onClick={() => handleSetPrimaryClient(client.leadId)}
@@ -580,7 +582,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
                 Сделать основным
               </button>
             )}
-            <button 
+            <button
               className={styles.quickCallBtn}
               style={{ background: '#fee2e2', color: '#ef4444' }}
               onClick={async () => {
@@ -604,7 +606,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
       <h3 style={{ fontWeight: 800, fontSize: '1.25rem', color: '#1e293b', borderBottom: '1px solid #f1f5f9', paddingBottom: '5px', margin: 0 }}>
         🏢 Объект недвижимости
       </h3>
-      <button 
+      <button
         className={styles.quickCallBtn}
         onClick={() => {
           setSearchQuery('');
@@ -642,7 +644,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
               {unit.rooms} комн. • {unit.area} м² • ${Number(unit.price).toLocaleString()}
             </div>
           </div>
-          <button 
+          <button
             className={styles.quickCallBtn}
             style={{ background: '#fee2e2', color: '#ef4444' }}
             onClick={() => setShowRemoveUnitModal({ id: unit.id, number: unit.number })}
@@ -659,13 +661,13 @@ const handleSetPrimaryClient = async (leadId: string) => {
     <h3 style={{ fontWeight: 800, marginBottom: '12px', color: '#2563eb', display: 'flex', alignItems: 'center', gap: '8px' }}>
       🏦 Блок «Ипотека» (Статус одобрения)
     </h3>
-    
+
     <div style={{ display: 'flex', gap: '15px', marginBottom: '12px' }}>
       <div style={{ flex: 1 }}>
         <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 800, fontSize: '1.25rem', color: '#475569', marginBottom: '5px' }}>Выбор банка</label>
-        <select 
-          className={styles.modalInput} 
-          value={mortgageBank} 
+        <select
+          className={styles.modalInput}
+          value={mortgageBank}
           onChange={e => setMortgageBank(e.target.value)}
         >
           <option value="">Не выбрано</option>
@@ -678,9 +680,9 @@ const handleSetPrimaryClient = async (leadId: string) => {
 
       <div style={{ flex: 1 }}>
         <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 800, fontSize: '1.25rem', color: '#475569', marginBottom: '5px' }}>Статус одобрения</label>
-        <select 
-          className={styles.modalInput} 
-          value={mortgageStatus} 
+        <select
+          className={styles.modalInput}
+          value={mortgageStatus}
           onChange={e => setMortgageStatus(e.target.value)}
         >
           <option value="NONE">Нет ипотеки</option>
@@ -694,8 +696,8 @@ const handleSetPrimaryClient = async (leadId: string) => {
 
     <div style={{ marginBottom: '15px' }}>
       <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 800, fontSize: '1.25rem', color: '#475569', marginBottom: '5px' }}>Комментарий по ипотеке</label>
-      <textarea 
-        className={styles.modalInput} 
+      <textarea
+        className={styles.modalInput}
         style={{ minHeight: '60px' }}
         value={mortgageComment}
         onChange={e => setMortgageComment(e.target.value)}
@@ -703,7 +705,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
       />
     </div>
 
-    <button 
+    <button
       className={styles.saveMortgageBtn}
       onClick={handleSaveMortgage}
       disabled={loading}
@@ -721,10 +723,10 @@ const handleSetPrimaryClient = async (leadId: string) => {
         <h2 style={{ fontWeight: 800 }}>➕ Добавить участника сделки</h2>
         <button className={styles.closeBtn} onClick={() => setShowAddClientModal(false)}>✕</button>
       </header>
-      
+
       <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
-        <input 
-          type="text" 
+        <input
+          type="text"
           className={styles.modalInput}
           placeholder="Имя, телефон или email..."
           value={searchQuery}
@@ -732,14 +734,14 @@ const handleSetPrimaryClient = async (leadId: string) => {
         />
         <button className={styles.quickCallBtn} onClick={handleSearchLeads}>🔍 Поиск</button>
       </div>
-      
+
       {searchLoading && <p>Поиск...</p>}
-      
+
       {searchResults.length > 0 && (
         <div style={{ border: '1px solid #e2e8f0', borderRadius: '12px', maxHeight: '250px', overflowY: 'auto', marginBottom: '16px' }}>
           {searchResults.map(lead => (
-            <div 
-              key={lead.id} 
+            <div
+              key={lead.id}
               style={{ padding: '12px', cursor: 'pointer', background: selectedClient?.id === lead.id ? '#eff6ff' : 'white', borderBottom: '1px solid #e2e8f0' }}
               onClick={() => setSelectedClient(lead)}
             >
@@ -748,16 +750,37 @@ const handleSetPrimaryClient = async (leadId: string) => {
           ))}
         </div>
       )}
-      
+
+      {selectedClient && (
+        <div style={{ marginBottom: '16px', padding: '10px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0' }}>
+          <strong>Выбран:</strong> {selectedClient.name} — {selectedClient.phone}
+        </div>
+      )}
+
       {selectedClient && (
         <div style={{ marginBottom: '16px' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <input type="checkbox" checked={isPrimaryClient} onChange={e => setIsPrimaryClient(e.target.checked)} />
-            Сделать основным клиентом (на кого оформляется объект)
+            Сделать основным клиентом (на кого оформляется договор)
           </label>
         </div>
       )}
-      
+
+      {/* Разделитель */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '16px 0' }}>
+        <div style={{ flex: 1, height: '1px', background: '#e2e8f0' }} />
+        <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>или</span>
+        <div style={{ flex: 1, height: '1px', background: '#e2e8f0' }} />
+      </div>
+
+      <button
+        className={styles.quickCallBtn}
+        style={{ width: '100%', marginBottom: '16px', background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', fontWeight: 700 }}
+        onClick={() => setShowRegisterNewClient(true)}
+      >
+        ➕ Зарегистрировать нового клиента
+      </button>
+
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
         <button className={styles.quickCallBtn} onClick={() => setShowAddClientModal(false)}>Отмена</button>
         <button className={styles.saveMortgageBtn} onClick={handleAddClient} disabled={!selectedClient}>
@@ -768,6 +791,23 @@ const handleSetPrimaryClient = async (leadId: string) => {
   </div>
 )}
 
+{/* Модалка регистрации нового клиента поверх модалки добавления участника */}
+{showRegisterNewClient && (
+  <LeadModal
+    onClose={() => setShowRegisterNewClient(false)}
+    organizationId={organizationId}
+    onSuccess={async () => {
+      // После создания — ничего не делаем здесь, всё обрабатывается в onCreated
+    }}
+    onCreated={async (newClientId: string, newClientName: string, newClientPhone: string) => {
+      // Закрываем модалку регистрации
+      setShowRegisterNewClient(false);
+      // Автоматически выбираем нового клиента в модалке добавления участника
+      setSelectedClient({ id: newClientId, name: newClientName, phone: newClientPhone });
+    }}
+  />
+)}
+
 {/* Модалка добавления объекта */}
 {showAddUnitModal && (
   <div className={styles.overlay} onClick={() => setShowAddUnitModal(false)}>
@@ -776,10 +816,10 @@ const handleSetPrimaryClient = async (leadId: string) => {
         <h2 style={{ fontWeight: 800 }}>🏢 Добавить объект недвижимости</h2>
         <button className={styles.closeBtn} onClick={() => setShowAddUnitModal(false)}>✕</button>
       </header>
-      
+
       <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
-        <input 
-          type="text" 
+        <input
+          type="text"
           className={styles.modalInput}
           placeholder="Номер квартиры или ЖК..."
           value={searchQuery}
@@ -787,14 +827,14 @@ const handleSetPrimaryClient = async (leadId: string) => {
         />
         <button className={styles.quickCallBtn} onClick={handleSearchUnits}>🔍 Поиск</button>
       </div>
-      
+
       {searchLoading && <p>Поиск...</p>}
-      
+
       {searchResults.length > 0 && (
         <div style={{ border: '1px solid #e2e8f0', borderRadius: '12px', maxHeight: '250px', overflowY: 'auto', marginBottom: '16px' }}>
           {searchResults.map(unit => (
-            <div 
-              key={unit.id} 
+            <div
+              key={unit.id}
               style={{ padding: '12px', cursor: 'pointer', background: selectedUnit?.id === unit.id ? '#eff6ff' : 'white', borderBottom: '1px solid #e2e8f0' }}
               onClick={() => setSelectedUnit(unit)}
             >
@@ -803,7 +843,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
           ))}
         </div>
       )}
-      
+
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
         <button className={styles.quickCallBtn} onClick={() => setShowAddUnitModal(false)}>Отмена</button>
         <button className={styles.saveMortgageBtn} onClick={handleAddUnit} disabled={!selectedUnit}>
@@ -822,12 +862,12 @@ const handleSetPrimaryClient = async (leadId: string) => {
         <h2 style={{ fontWeight: 800 }}>❌ Удаление объекта №{showRemoveUnitModal.number}</h2>
         <button className={styles.closeBtn} onClick={() => setShowRemoveUnitModal(null)}>✕</button>
       </header>
-      
+
       <p style={{ marginBottom: '16px', color: '#64748b' }}>Укажите причину отказа от объекта:</p>
-      
-      <select 
-        className={styles.modalInput} 
-        value={deleteReason} 
+
+      <select
+        className={styles.modalInput}
+        value={deleteReason}
         onChange={e => setDeleteReason(e.target.value)}
         style={{ marginBottom: '12px' }}
       >
@@ -836,9 +876,9 @@ const handleSetPrimaryClient = async (leadId: string) => {
           <option key={reason} value={reason}>{reason}</option>
         ))}
       </select>
-      
+
       {deleteReason === 'Другое' && (
-        <input 
+        <input
           type="text"
           className={styles.modalInput}
           placeholder="Укажите причину..."
@@ -846,7 +886,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
           onChange={e => setCustomDeleteReason(e.target.value)}
         />
       )}
-      
+
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
         <button className={styles.quickCallBtn} onClick={() => setShowRemoveUnitModal(null)}>Отмена</button>
         <button className={styles.saveMortgageBtn} onClick={handleRemoveUnit}>
