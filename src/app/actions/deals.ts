@@ -233,10 +233,33 @@ export async function addDealClient(dealId: string, leadId: string, isPrimary: b
       return { success: false, error: 'ALREADY_EXISTS', message: 'Клиент уже добавлен в сделку' };
     }
 
-    // Если добавляем основного клиента, снимаем флаг с других
+    // Если добавляем основного клиента, снимаем флаг с других и обновляем Deal.leadId
     if (isPrimary) {
+      // Сначала сохраняем текущего основного (из Deal.leadId) в DealClient как не-основного,
+      // если его там ещё нет — чтобы он не пропал из списка участников
+      const currentDeal: any[] = await prisma.$queryRaw`
+        SELECT "leadId" FROM "Deal" WHERE "id" = ${dealId} LIMIT 1
+      `;
+      const oldLeadId = currentDeal[0]?.leadId;
+      if (oldLeadId && oldLeadId !== leadId) {
+        const oldInDealClient: any[] = await prisma.$queryRaw`
+          SELECT id FROM "DealClient" WHERE "dealId" = ${dealId} AND "leadId" = ${oldLeadId} LIMIT 1
+        `;
+        if (oldInDealClient.length === 0) {
+          // Добавляем старого основного как не-основного участника
+          await prisma.$executeRaw`
+            INSERT INTO "DealClient" ("id", "dealId", "leadId", "isPrimary", "createdAt", "updatedAt")
+            VALUES (${crypto.randomUUID()}, ${dealId}, ${oldLeadId}, false, NOW(), NOW())
+          `;
+        }
+      }
+
       await prisma.$executeRaw`
         UPDATE "DealClient" SET "isPrimary" = false WHERE "dealId" = ${dealId}
+      `;
+      // Обновляем основного клиента в самой сделке
+      await prisma.$executeRaw`
+        UPDATE "Deal" SET "leadId" = ${leadId}, "updatedAt" = NOW() WHERE "id" = ${dealId}
       `;
     }
 
@@ -288,6 +311,23 @@ export async function removeDealClient(dealClientId: string) {
 // Сменить основного клиента (обновляет и Deal.leadId, и флаг в DealClient)
 export async function setPrimaryClient(dealId: string, newLeadId: string) {
   try {
+    // 0. Сохраняем текущего основного в DealClient если его там нет
+    const currentDeal: any[] = await prisma.$queryRaw`
+      SELECT "leadId" FROM "Deal" WHERE "id" = ${dealId} LIMIT 1
+    `;
+    const oldLeadId = currentDeal[0]?.leadId;
+    if (oldLeadId && oldLeadId !== newLeadId) {
+      const oldInDealClient: any[] = await prisma.$queryRaw`
+        SELECT id FROM "DealClient" WHERE "dealId" = ${dealId} AND "leadId" = ${oldLeadId} LIMIT 1
+      `;
+      if (oldInDealClient.length === 0) {
+        await prisma.$executeRaw`
+          INSERT INTO "DealClient" ("id", "dealId", "leadId", "isPrimary", "createdAt", "updatedAt")
+          VALUES (${crypto.randomUUID()}, ${dealId}, ${oldLeadId}, false, NOW(), NOW())
+        `;
+      }
+    }
+
     // 1. Снимаем флаг isPrimary со всех клиентов этой сделки
     await prisma.$executeRaw`
       UPDATE "DealClient" SET "isPrimary" = false WHERE "dealId" = ${dealId}
