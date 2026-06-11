@@ -16,8 +16,31 @@
       transparent 40%
     ),
     #f8fafc;
+}
 
+.kanbanScroll {
   overflow-x: auto;
+  display: flex;
+  flex-direction: column-reverse;
+  margin-bottom: 16px;
+}
+
+.kanbanScroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.kanbanScroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+.kanbanScroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 4px;
+}
+
+.kanbanScroll::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
 }
 
 .kanbanBoardVertical {
@@ -397,4 +420,3 @@
   background: #dbeafe;
   color: #1d4ed8;
 }
-

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import styles from './Deals.module.css';
 import { updateDealStatus, updateDealMortgage,
   getDealClients,
@@ -43,6 +43,96 @@ const STAGES: { id: string; label: string; color: string; type: StageType; child
   { id: 'CANCELLED', label: 'Cancelled (расторжение)', color: '#64748b', type: 'normal' }
 ];
 
+// Порядковые номера статусов для проверки направления
+const STATUS_ORDER: Record<string, number> = {
+  NEW_LEAD: 0,
+  CLARIFICATION: 1,
+  CALL: 2,
+  SECOND_CALL: 3,
+  THIRD_CALL: 4,
+  CONSULTATION: 5,
+  PRE_RESERVATION: 6,
+  RESERVATION: 7,
+  CONTRACT_PREPARATION: 8,
+  CONTRACT: 9,
+  CLIENT_CONFIRMATION: 10,
+  WAITING_PAYMENT: 11,
+  PAYMENT_CONFIRMED: 12,
+  SUCCESS: 13,
+  FAILED: 98,
+  CANCELLED: 99,
+};
+
+// Финальные статусы — из них нельзя двигаться никуда
+const FINAL_STATUSES = ['SUCCESS', 'FAILED', 'CANCELLED'];
+
+// Статусы свободной зоны (до и включая звонки)
+const FREE_ZONE = ['NEW_LEAD', 'CLARIFICATION', 'CALL', 'SECOND_CALL', 'THIRD_CALL'];
+
+// Статусы строгой зоны (после Soft брони включительно)
+const STRICT_ZONE = ['PRE_RESERVATION', 'RESERVATION', 'CONTRACT_PREPARATION', 'CONTRACT', 'CLIENT_CONFIRMATION', 'WAITING_PAYMENT', 'PAYMENT_CONFIRMED'];
+
+function isTransitionAllowed(from: string, to: string): { allowed: boolean; reason?: string } {
+  // Из финальных статусов — никуда
+  if (FINAL_STATUSES.includes(from)) {
+    return { allowed: false, reason: `Сделка в финальном статусе "${from}" — движение заблокировано` };
+  }
+
+  // В Won — нельзя вручную, только автоматически
+  if (to === 'SUCCESS') {
+    return { allowed: false, reason: 'Статус Won присваивается автоматически после регистрации в NAPR' };
+  }
+
+  // В Lost и Cancelled — можно из любого статуса
+  if (to === 'FAILED' || to === 'CANCELLED') {
+    return { allowed: true };
+  }
+
+  // Внутри звонков — только вперёд
+  const callOrder: Record<string, number> = { CALL: 0, SECOND_CALL: 1, THIRD_CALL: 2 };
+  if (from in callOrder && to in callOrder) {
+    if (callOrder[to] <= callOrder[from]) {
+      return { allowed: false, reason: 'Внутри звонков можно двигаться только вперёд: 1-й → 2-й → 3-й' };
+    }
+    return { allowed: true };
+  }
+
+  // Из звонков (1-й и 2-й) можно на Личную консультацию
+  if ((from === 'CALL' || from === 'SECOND_CALL') && to === 'CONSULTATION') {
+    return { allowed: true };
+  }
+
+  // Из свободной зоны — на Личную консультацию и дальше (вперёд)
+  if (FREE_ZONE.includes(from)) {
+    const fromOrder = STATUS_ORDER[from] ?? 0;
+    const toOrder = STATUS_ORDER[to] ?? 0;
+    if (toOrder >= fromOrder) return { allowed: true };
+    // Назад в свободной зоне — разрешено
+    if (FREE_ZONE.includes(to)) return { allowed: true };
+    return { allowed: false, reason: 'Нельзя вернуться назад из свободной зоны в более ранний статус' };
+  }
+
+  // Из строгой зоны — на Личную консультацию разрешено (с сохранением предыдущего статуса)
+  if (STRICT_ZONE.includes(from) && to === 'CONSULTATION') {
+    return { allowed: true };
+  }
+
+  // В строгой зоне — только вперёд
+  if (STRICT_ZONE.includes(from) && STRICT_ZONE.includes(to)) {
+    const fromOrder = STATUS_ORDER[from] ?? 0;
+    const toOrder = STATUS_ORDER[to] ?? 0;
+    if (toOrder > fromOrder) return { allowed: true };
+    return { allowed: false, reason: 'После Soft-брони сделки можно двигать только вперёд' };
+  }
+
+  // Всё остальное — вперёд разрешено
+  const fromOrder = STATUS_ORDER[from] ?? 0;
+  const toOrder = STATUS_ORDER[to] ?? 0;
+  if (toOrder >= fromOrder) return { allowed: true };
+
+  return { allowed: false, reason: 'Этот переход не разрешён' };
+}
+
 interface DealsClientProps {
   initialDeals: any[];
   organizationId: string;
@@ -52,6 +142,47 @@ export default function DealsClient({ initialDeals, organizationId }: DealsClien
   const router = useRouter();
   const [deals, setDeals] = useState(initialDeals);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({ CALL_GROUP: true });
+  const [draggingDealStatus, setDraggingDealStatus] = useState<string | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollAnimRef = useRef<number | null>(null);
+
+  const startAutoScroll = (clientX: number) => {
+    if (scrollAnimRef.current) cancelAnimationFrame(scrollAnimRef.current);
+
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const edgeSize = 120; // зона у края в пикселях
+    const maxSpeed = 18;  // макс скорость прокрутки
+
+    const step = () => {
+      const distFromLeft = clientX - rect.left;
+      const distFromRight = rect.right - clientX;
+
+      let speed = 0;
+      if (distFromLeft < edgeSize) {
+        speed = -((edgeSize - distFromLeft) / edgeSize) * maxSpeed;
+      } else if (distFromRight < edgeSize) {
+        speed = ((edgeSize - distFromRight) / edgeSize) * maxSpeed;
+      }
+
+      if (speed !== 0) {
+        container.scrollLeft += speed;
+      }
+
+      scrollAnimRef.current = requestAnimationFrame(step);
+    };
+
+    scrollAnimRef.current = requestAnimationFrame(step);
+  };
+
+  const stopAutoScroll = () => {
+    if (scrollAnimRef.current) {
+      cancelAnimationFrame(scrollAnimRef.current);
+      scrollAnimRef.current = null;
+    }
+  };
   const [selectedDeal, setSelectedDeal] = useState<any | null>(null);
 
   // Поля для редактирования ипотеки в модалке
@@ -82,25 +213,52 @@ const [customDeleteReason, setCustomDeleteReason] = useState('');
 
   const handleDragStart = (e: React.DragEvent, dealId: string) => {
     e.dataTransfer.setData('text/plain', dealId);
+    const deal = deals.find((d: any) => d.id === dealId);
+    if (deal) setDraggingDealStatus(deal.status);
+  };
+
+  const handleDragEnd = () => {
+    setDraggingDealStatus(null);
+    stopAutoScroll();
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    startAutoScroll(e.clientX);
   };
 
   const handleDrop = async (e: React.DragEvent, targetStageId: string) => {
     e.preventDefault();
+    setDraggingDealStatus(null);
+    stopAutoScroll();
     const dealId = e.dataTransfer.getData('text/plain');
     if (!dealId) return;
 
+    const deal = deals.find((d: any) => d.id === dealId);
+    if (!deal) return;
+
     const targetStage = targetStageId === 'CALL_GROUP' ? 'CALL' : targetStageId;
 
+    const { allowed, reason } = isTransitionAllowed(deal.status, targetStage);
+    if (!allowed) {
+      alert(reason || 'Этот переход не разрешён');
+      return;
+    }
+
+    const previousStatus = STRICT_ZONE.includes(deal.status) && targetStage === 'CONSULTATION'
+      ? deal.status
+      : undefined;
+
     const originalDeals = [...deals];
-    setDeals(prev =>
-      prev.map(d => d.id === dealId ? { ...d, status: targetStage } : d)
+    setDeals((prev: any[]) =>
+      prev.map((d: any) => d.id === dealId ? {
+        ...d,
+        status: targetStage,
+        ...(previousStatus ? { previousStatus } : {})
+      } : d)
     );
 
-    const res = await updateDealStatus(dealId, targetStage);
+    const res = await updateDealStatus(dealId, targetStage, previousStatus);
     if (!res.success) {
       alert(res.message || 'Ошибка при обновлении статуса сделки в БД!');
       setDeals(originalDeals);
@@ -205,8 +363,16 @@ const handleAddClient = async () => {
   const res = await addDealClient(selectedDeal.id, selectedClient.id, isPrimaryClient);
   if (res.success) {
     await loadDealExtras(selectedDeal.id);
+    // Если добавили как основного — обновляем имя на доске
+    if (isPrimaryClient) {
+      setDeals((prev: any[]) => prev.map((d: any) =>
+        d.id === selectedDeal.id ? { ...d, clientName: selectedClient.name } : d
+      ));
+      setSelectedDeal((prev: any) => ({ ...prev, clientName: selectedClient.name }));
+    }
     setShowAddClientModal(false);
     setSelectedClient(null);
+    setIsPrimaryClient(false);
     setSearchQuery('');
     setSearchResults([]);
     alert('Клиент добавлен в сделку');
@@ -299,7 +465,14 @@ const handleSetPrimaryClient = async (leadId: string) => {
         <p style={{color: '#64748b', fontSize: '0.95rem'}}></p>
       </header>
 
-      <div className={styles.kanbanBoardVertical}>
+      <div
+        className={styles.kanbanScroll}
+        ref={scrollContainerRef}
+        onDragOver={(e) => { e.preventDefault(); startAutoScroll(e.clientX); }}
+        onDragLeave={stopAutoScroll}
+        onDrop={stopAutoScroll}
+      >
+        <div className={styles.kanbanBoardVertical}>
         {STAGES.map((stage) => {
           if (stage.type === 'child') return null;
 
@@ -321,6 +494,14 @@ const handleSetPrimaryClient = async (leadId: string) => {
             <div
               key={stage.id}
               className={`${styles.verticalStage} ${stage.type === 'group' ? styles.groupStage : ''}`}
+              style={{
+                opacity: draggingDealStatus && stage.type !== 'group'
+                  ? isTransitionAllowed(draggingDealStatus, stage.id === 'CALL_GROUP' ? 'CALL' : stage.id).allowed
+                    ? 1
+                    : 0.35
+                  : 1,
+                transition: 'opacity 0.2s',
+              }}
             >
               <div
                 className={styles.stageHeader}
@@ -362,6 +543,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
                         className={styles.dealCardVertical}
                         draggable
                         onDragStart={(e) => handleDragStart(e, deal.id)}
+                        onDragEnd={handleDragEnd}
                         onClick={() => handleCardClick(deal)}
                       >
                         <div className={styles.cardHeaderSmall}>
@@ -467,6 +649,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
                                 className={styles.dealCardVertical}
                                 draggable
                                 onDragStart={(e) => handleDragStart(e, deal.id)}
+                                onDragEnd={handleDragEnd}
                                 onClick={() => handleCardClick(deal)}
                               >
                                 <div className={styles.cardHeaderSmall}>
@@ -497,6 +680,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
             </div>
           );
         })}
+      </div>
       </div>
 
       {/* Модальное окно деталей сделки с блоком Ипотеки */}
@@ -530,36 +714,8 @@ const handleSetPrimaryClient = async (leadId: string) => {
       </button>
     </div>
 
-    {/* Основной клиент (из сделки) */}
-    <div style={{ padding: '10px 0', borderBottom: '1px solid #f1f5f9' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <strong style={{
-    fontSize: '1.2rem',
-    color: '#0f172a'
-  }}>{selectedDeal.clientName || '—'}</strong>
-          <span style={{ background: '#d1fae5', color: '#065f46', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', marginLeft: '8px' }}>
-            ОСНОВНОЙ
-          </span>
-          <div
-  style={{
-    fontSize: '1rem',
-    color: '#475569',
-    marginTop: '4px'
-  }}
->{selectedDeal.lead?.phone || '—'}</div>
-          <div
-  style={{
-    fontSize: '1rem',
-    color: '#475569'
-  }}
->{selectedDeal.lead?.email || '—'}</div>
-        </div>
-      </div>
-    </div>
-
-    {/* Дополнительные клиенты */}
-    {dealClients.filter(c => c.leadId !== selectedDeal.lead?.id).map(client => (
+    {/* Все клиенты сделки из dealClients */}
+    {dealClients.map(client => (
       <div key={client.id} style={{ padding: '10px 0', borderBottom: '1px solid #f1f5f9' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
@@ -718,11 +874,12 @@ const handleSetPrimaryClient = async (leadId: string) => {
 {/* Модалка добавления клиента */}
 {showAddClientModal && (
   <div className={styles.overlay} onClick={() => setShowAddClientModal(false)}>
-    <div className={styles.modal} onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+    <div className={styles.modal} onClick={e => e.stopPropagation()} style={{ maxWidth: '500px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
       <header className={styles.modalHeader}>
         <h2 style={{ fontWeight: 800 }}>➕ Добавить участника сделки</h2>
         <button className={styles.closeBtn} onClick={() => setShowAddClientModal(false)}>✕</button>
       </header>
+      <div style={{ overflowY: 'auto', flex: 1, padding: '0 4px' }}>
 
       <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
         <input
@@ -761,7 +918,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
         <div style={{ marginBottom: '16px' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <input type="checkbox" checked={isPrimaryClient} onChange={e => setIsPrimaryClient(e.target.checked)} />
-            Сделать основным клиентом (на кого оформляется договор)
+            Сделать основным клиентом (на кого оформляется объект)
           </label>
         </div>
       )}
@@ -786,6 +943,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
         <button className={styles.saveMortgageBtn} onClick={handleAddClient} disabled={!selectedClient}>
           Добавить
         </button>
+      </div>
       </div>
     </div>
   </div>

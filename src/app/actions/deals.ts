@@ -97,7 +97,7 @@ const STAGE_HIERARCHY: Record<string, number> = {
 };
 
 // Обновить статус сделки (перетаскивание по воронке) напрямую через SQL
-export async function updateDealStatus(dealId: string, status: any) {
+export async function updateDealStatus(dealId: string, status: any, previousStatus?: string) {
   try {
     // 1. Проверяем бизнес-правила переходов по воронке
     const deals: any[] = await prisma.$queryRaw`
@@ -107,25 +107,33 @@ export async function updateDealStatus(dealId: string, status: any) {
 
     if (deal) {
       const targetRank = STAGE_HIERARCHY[status] !== undefined ? STAGE_HIERARCHY[status] : 0;
-      
+
       // Начиная со стадии 'Личная консультация' (ранг 5) и дальше - обязательно должен быть привязан объект (квартира)
       if (targetRank >= 5 && targetRank <= 13 && !deal.unitId) {
-        return { 
-          success: false, 
-          error: 'NO_UNIT_LINKED', 
-          message: 'Необходимо привязать конкретный объект недвижимости к сделке перед переходом на этот этап воронки!' 
+        return {
+          success: false,
+          error: 'NO_UNIT_LINKED',
+          message: 'Необходимо привязать конкретный объект недвижимости к сделке перед переходом на этот этап воронки!'
         };
       }
     }
 
-    // 2. Обновляем статус в БД
-    await prisma.$executeRaw`
-      UPDATE "Deal"
-      SET "status" = ${status}::"DealStatus", "updatedAt" = NOW()
-      WHERE "id" = ${dealId}
-    `;
+    // 2. Обновляем статус в БД (+ previousStatus если возврат на Личную консультацию)
+    if (previousStatus) {
+      await prisma.$executeRaw`
+        UPDATE "Deal"
+        SET "status" = ${status}::"DealStatus", "previousStatus" = ${previousStatus}, "updatedAt" = NOW()
+        WHERE "id" = ${dealId}
+      `;
+    } else {
+      await prisma.$executeRaw`
+        UPDATE "Deal"
+        SET "status" = ${status}::"DealStatus", "updatedAt" = NOW()
+        WHERE "id" = ${dealId}
+      `;
+    }
     revalidatePath('/deals');
-    revalidatePath('/'); // Обновить дашборд тоже
+    revalidatePath('/');
     return { success: true };
   } catch (error) {
     console.error('Update deal status SQL error:', error);
@@ -184,18 +192,18 @@ export async function addDealClient(dealId: string, leadId: string, isPrimary: b
       WHERE "dealId" = ${dealId} AND "leadId" = ${leadId} 
       LIMIT 1
     `;
-    
+
     if (existing.length > 0) {
       return { success: false, error: 'ALREADY_EXISTS', message: 'Клиент уже добавлен в сделку' };
     }
-    
+
     // Если добавляем основного клиента, снимаем флаг с других
     if (isPrimary) {
       await prisma.$executeRaw`
         UPDATE "DealClient" SET "isPrimary" = false WHERE "dealId" = ${dealId}
       `;
     }
-    
+
     const id = crypto.randomUUID();
     await prisma.$executeRaw`
       INSERT INTO "DealClient" ("id", "dealId", "leadId", "isPrimary", "createdAt", "updatedAt")
