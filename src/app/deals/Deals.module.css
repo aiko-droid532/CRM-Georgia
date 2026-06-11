@@ -21,11 +21,15 @@
 .kanbanScroll {
   overflow-x: auto;
   margin-bottom: 16px;
+  margin-top: 16px;
+  padding-top: 8px;
   transform: rotateX(180deg);
 }
 
 .kanbanBoardInner {
   transform: rotateX(180deg);
+  padding-top: 4px;
+}
 }
 
 .kanbanScroll::-webkit-scrollbar {
@@ -56,8 +60,8 @@
 }
 
 .verticalStage {
-  width: 420px;
-  min-width: 420px;
+  width: 280px;
+  min-width: 280px;
 
   background: rgba(255,255,255,0.85);
   backdrop-filter: blur(12px);
@@ -286,11 +290,6 @@
 .childStageCard {
   border-left: 3px solid #cbd5e1;
   padding-left: 10px;
-}
-
-.verticalStage {
-  width: 500px;
-  min-width: 500px;
 }
 
 /* Стили модального окна и деталей сделки */

@@ -91,8 +91,8 @@ function isTransitionAllowed(from: string, to: string): { allowed: boolean; reas
   // Внутри звонков — только вперёд
   const callOrder: Record<string, number> = { CALL: 0, SECOND_CALL: 1, THIRD_CALL: 2 };
   if (from in callOrder && to in callOrder) {
-    if (callOrder[to] <= callOrder[from]) {
-      return { allowed: false, reason: 'Внутри звонков можно двигаться только вперёд: 1-й → 2-й → 3-й' };
+    if (callOrder[to] !== callOrder[from] + 1) {
+      return { allowed: false, reason: 'Звонки идут строго по порядку: 1-й → 2-й → 3-й, перепрыгнуть нельзя' };
     }
     return { allowed: true };
   }
@@ -934,7 +934,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
         <div style={{ marginBottom: '16px' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <input type="checkbox" checked={isPrimaryClient} onChange={e => setIsPrimaryClient(e.target.checked)} />
-            Сделать основным клиентом (на кого оформляется объект)
+            Сделать основным клиентом (на кого оформляется договор)
           </label>
         </div>
       )}
