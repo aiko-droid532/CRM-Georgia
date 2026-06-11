@@ -20,6 +20,7 @@ export async function getDeals(organizationId: string) {
         d."mortgageComment" as "dealMortgageComment",
         d."createdAt" as "dealCreatedAt",
         d."updatedAt" as "dealUpdatedAt",
+        d."previousStatus" as "dealPreviousStatus",
         l.id as "leadId",
         l.name as "leadName",
         l.phone as "leadPhone",
@@ -52,6 +53,7 @@ export async function getDeals(organizationId: string) {
       mortgageComment: d.dealMortgageComment || '',
       createdAt: d.dealCreatedAt,
       updatedAt: d.dealUpdatedAt,
+      previousStatus: d.dealPreviousStatus || null,
       clientName: d.leadName, // Добавили обратную совместимость для DealsClient
       lead: d.leadId ? {
         id: d.leadId,

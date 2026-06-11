@@ -541,8 +541,12 @@ const handleSetPrimaryClient = async (leadId: string) => {
                 {stageDeals.length > 0 ? (
                   stageDeals.map((deal) => {
                     const daysInStatus = Math.floor((Date.now() - new Date(deal.updatedAt).getTime()) / (1000 * 60 * 60 * 24));
-                    const isSlaOverdue = daysInStatus >= 3; // SLA 3 дня на статус по умолчанию
+                    const isSlaOverdue = daysInStatus >= 3;
 
+                    // Полоска предыдущего статуса — только в колонке Личная консультация
+                    const prevStatusColor = stage.id === 'CONSULTATION' && deal.previousStatus
+                      ? STAGES.find(s => s.id === deal.previousStatus)?.color
+                      : null;
 
                     return (
                       <div
@@ -552,6 +556,10 @@ const handleSetPrimaryClient = async (leadId: string) => {
                         onDragStart={(e) => handleDragStart(e, deal.id)}
                         onDragEnd={handleDragEnd}
                         onClick={() => handleCardClick(deal)}
+                        style={prevStatusColor ? {
+                          borderLeft: `4px solid ${prevStatusColor}`,
+                          paddingLeft: '10px',
+                        } : undefined}
                       >
                         <div className={styles.cardHeaderSmall}>
                           <span className={styles.unitTagSmall}>{deal.unit?.number ? `№${deal.unit.number}` : 'Без объекта'}</span>
