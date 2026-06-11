@@ -472,6 +472,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
         onDragLeave={stopAutoScroll}
         onDrop={stopAutoScroll}
       >
+        <div className={styles.kanbanBoardInner}>
         <div className={styles.kanbanBoardVertical}>
         {STAGES.map((stage) => {
           if (stage.type === 'child') return null;
@@ -495,11 +496,17 @@ const handleSetPrimaryClient = async (leadId: string) => {
               key={stage.id}
               className={`${styles.verticalStage} ${stage.type === 'group' ? styles.groupStage : ''}`}
               style={{
-                opacity: draggingDealStatus && stage.type !== 'group'
-                  ? isTransitionAllowed(draggingDealStatus, stage.id === 'CALL_GROUP' ? 'CALL' : stage.id).allowed
-                    ? 1
-                    : 0.35
-                  : 1,
+                opacity: (() => {
+                  if (!draggingDealStatus) return 1;
+                  if (stage.type === 'group' && stage.children) {
+                    // Для группы звонков — затемняем если ни один дочерний статус недоступен
+                    const anyAllowed = stage.children.some(
+                      child => isTransitionAllowed(draggingDealStatus, child).allowed
+                    );
+                    return anyAllowed ? 1 : 0.35;
+                  }
+                  return isTransitionAllowed(draggingDealStatus, stage.id).allowed ? 1 : 0.35;
+                })(),
                 transition: 'opacity 0.2s',
               }}
             >
@@ -680,6 +687,7 @@ const handleSetPrimaryClient = async (leadId: string) => {
             </div>
           );
         })}
+      </div>
       </div>
       </div>
 

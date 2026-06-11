@@ -166,17 +166,51 @@ export async function updateDealMortgage(data: {
   }
 }
 
-// Получить всех дополнительных клиентов сделки (через DealClient)
+// Получить всех клиентов сделки (основной из Deal + дополнительные из DealClient)
 export async function getDealClients(dealId: string) {
   try {
-    const clients: any[] = await prisma.$queryRaw`
-      SELECT dc.*, l.name, l.phone, l.email, l.iin
+    // Получаем основного клиента из самой сделки
+    const dealRows: any[] = await prisma.$queryRaw`
+      SELECT d."leadId", l.name, l.phone, l.email, l.iin
+      FROM "Deal" d
+      JOIN "Lead" l ON d."leadId" = l.id
+      WHERE d."id" = ${dealId}
+      LIMIT 1
+    `;
+
+    // Получаем дополнительных клиентов из DealClient
+    const extraClients: any[] = await prisma.$queryRaw`
+      SELECT dc.id, dc."leadId", dc."isPrimary", dc."createdAt",
+             l.name, l.phone, l.email, l.iin
       FROM "DealClient" dc
       JOIN "Lead" l ON dc."leadId" = l.id
       WHERE dc."dealId" = ${dealId}
       ORDER BY dc."isPrimary" DESC, dc."createdAt" ASC
     `;
-    return clients;
+
+    // Если основной клиент уже есть в DealClient — не дублируем
+    const primaryLeadId = dealRows[0]?.leadId;
+    const primaryInDealClient = extraClients.find(c => c.leadId === primaryLeadId);
+
+    let allClients = [...extraClients];
+
+    if (!primaryInDealClient && dealRows[0]) {
+      // Добавляем основного клиента из Deal как первый с isPrimary=true
+      allClients = [
+        {
+          id: `deal-primary-${dealId}`,
+          leadId: dealRows[0].leadId,
+          isPrimary: true,
+          name: dealRows[0].name,
+          phone: dealRows[0].phone,
+          email: dealRows[0].email,
+          iin: dealRows[0].iin,
+        },
+        ...extraClients,
+      ];
+    }
+
+    return allClients;
   } catch (error) {
     console.error('getDealClients error:', error);
     return [];

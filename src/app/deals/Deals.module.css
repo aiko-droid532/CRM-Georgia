@@ -20,9 +20,12 @@
 
 .kanbanScroll {
   overflow-x: auto;
-  display: flex;
-  flex-direction: column-reverse;
   margin-bottom: 16px;
+  transform: rotateX(180deg);
+}
+
+.kanbanBoardInner {
+  transform: rotateX(180deg);
 }
 
 .kanbanScroll::-webkit-scrollbar {
