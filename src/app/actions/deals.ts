@@ -99,7 +99,7 @@ const STAGE_HIERARCHY: Record<string, number> = {
 };
 
 // Обновить статус сделки (перетаскивание по воронке) напрямую через SQL
-export async function updateDealStatus(dealId: string, status: any, previousStatus?: string) {
+export async function updateDealStatus(dealId: string, status: any, previousStatus?: string, isUndo?: boolean) {
   try {
     // 1. Проверяем бизнес-правила переходов по воронке
     const deals: any[] = await prisma.$queryRaw`
@@ -134,6 +134,29 @@ export async function updateDealStatus(dealId: string, status: any, previousStat
         WHERE "id" = ${dealId}
       `;
     }
+
+    // Если это откат — пишем в ChangeLog
+    if (isUndo) {
+      const dealRows: any[] = await prisma.$queryRaw`
+        SELECT "leadId" FROM "Deal" WHERE "id" = ${dealId} LIMIT 1
+      `;
+      const leadId = dealRows[0]?.leadId;
+      if (leadId) {
+        await prisma.$executeRaw`
+          INSERT INTO "ChangeLog" ("id", "leadId", "managerId", "field", "oldValue", "newValue", "createdAt")
+          VALUES (
+            ${crypto.randomUUID()},
+            ${leadId},
+            ${'system'},
+            'STATUS_UNDO',
+            ${status},
+            ${'Отмена переноса карточки менеджером'},
+            NOW()
+          )
+        `;
+      }
+    }
+
     revalidatePath('/deals');
     revalidatePath('/');
     return { success: true };
