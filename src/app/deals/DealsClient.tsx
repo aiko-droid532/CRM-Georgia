@@ -589,9 +589,8 @@ const handleSetPrimaryClient = async (leadId: string) => {
                         {stage.id === 'CALL_GROUP' && (
                           <div style={{marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                             <span style={{
-                              fontSize: '0.75rem',
-                              fontWeight: 800,
-                              fontSize: '1.25rem',
+                              fontSize: '0.7rem',
+                              fontWeight: 700,
                               color: '#2563eb',
                               background: '#eff6ff',
                               padding: '2px 6px',

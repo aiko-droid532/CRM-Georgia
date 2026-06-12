@@ -60,8 +60,8 @@
 }
 
 .verticalStage {
-  width: 280px;
-  min-width: 280px;
+  width: 350px;
+  min-width: 350px;
 
   background: rgba(255,255,255,0.85);
   backdrop-filter: blur(12px);
@@ -260,14 +260,14 @@
 }
 
 .clientNameSmall {
-  font-size: 1rem;
-  font-weight: 800;
+  font-size: 0.85rem;
+  font-weight: 700;
   color: #0f172a;
   margin-bottom: 8px;
 }
 
 .priceTagSmall {
-  font-size: 0.90rem;
+  font-size: 0.8rem;
   font-weight: 700;
   color: #0f172a;
 }
